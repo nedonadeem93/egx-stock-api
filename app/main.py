@@ -1,12 +1,13 @@
 import sys
 import os
 
-# ضبط مسار المشروع
+# ضبط مسار المشروع لتفادي أخطاء الاستيراد
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
 import streamlit as st
 import pandas as pd
 import yfinance as yf
+import plotly.graph_objects as go
 
 # إعدادات الصفحة
 st.set_page_config(
@@ -15,97 +16,122 @@ st.set_page_config(
     layout="wide"
 )
 
+# ===== Caching لتقليل الضغط على yfinance وزيادة السرعة =====
+@st.cache_data(ttl=300)
+def get_stock_data(symbol, period):
+    ticker = yf.Ticker(symbol)
+    df = ticker.history(period=period)
+    return df
+
+@st.cache_data(ttl=3600)
+def get_ath(symbol):
+    ticker = yf.Ticker(symbol)
+    full_df = ticker.history(period="max")
+    return full_df['High'].max() if not full_df.empty else None
+
 # عنوان لوحة التحكم
 st.title("📈 لوحة المتابعة وإدارة مخاطر القمم (EGX)")
-st.caption("كشف القمم التاريخية، اتخاذ القرار، ونقاط الأمان - خاص بك")
+st.caption("كشف القمم التاريخية، اتخاذ القرار، ونقاط الأمان")
 
 # شريط جانبي لإدخال البيانات
-st.sidebar.header("إعدادات البحث")
-stock_symbol = st.sidebar.text_input("رمز السهم (مثال: ABUK, COMI, TMGH):", value="ABUK").upper()
-period = st.sidebar.selectbox("الفترة الزمنية للتحليل:", ["6mo", "1y", "2y", "5y", "max"], index=3)
+st.sidebar.header("⚙️ إعدادات البحث")
+stock_symbol = st.sidebar.text_input("رمز السهم:", value="ABUK").upper().strip()
+period = st.sidebar.selectbox("الفترة الزمنية:", ["6mo", "1y", "2y", "5y", "max"], index=1)
 
 if stock_symbol:
     full_symbol = f"{stock_symbol}.CA" if not stock_symbol.endswith(".CA") else stock_symbol
 
     try:
-        ticker = yf.Ticker(full_symbol)
-        df = ticker.history(period=period)
+        with st.spinner("جاري تحميل البيانات..."):
+            df = get_stock_data(full_symbol, period)
+            ath_price = get_ath(full_symbol)
 
-        if not df.empty and len(df) >= 20:
-            # --- حساب المؤشرات الفنية ---
-            df['EMA20'] = df['Close'].ewm(span=20, adjust=False).mean()
-            df['EMA50'] = df['Close'].ewm(span=50, adjust=False).mean() if len(df) >= 50 else df['EMA20']
-            df['Vol_Avg20'] = df['Volume'].rolling(window=20).mean()
+        if df.empty or len(df) < 20:
+            st.warning("⚠️ البيانات غير كافية أو الرمز غير صحيح. تأكد من رمز السهم.")
+            st.stop()
 
-            # بيانات الجلسة الأخيرة والقمة التاريخية
-            last_close = df['Close'].iloc[-1]
-            last_high = df['High'].iloc[-1]
-            last_low = df['Low'].iloc[-1]
-            last_vol = df['Volume'].iloc[-1]
-            avg_vol = df['Vol_Avg20'].iloc[-1] if not pd.isna(df['Vol_Avg20'].iloc[-1]) else last_vol
-            prev_close = df['Close'].iloc[-2] if len(df) > 1 else last_close
+        # ===== حساب المؤشرات الفنية =====
+        df['EMA20'] = df['Close'].ewm(span=20, adjust=False).mean()
+        df['EMA50'] = df['Close'].ewm(span=50, adjust=False).mean() if len(df) >= 50 else df['EMA20']
+        df['Vol_Avg20'] = df['Volume'].rolling(window=20).mean()
 
-            # القمة والقاع التاريخي في الفترة المختارة
-            ath_price = df['High'].max() # القمة التاريخية
-            atl_price = df['Low'].min()
+        last_close = df['Close'].iloc[-1]
+        last_high = df['High'].iloc[-1]
+        last_low = df['Low'].iloc[-1]
+        last_vol = df['Volume'].iloc[-1]
+        prev_close = df['Close'].iloc[-2]
 
-            # تغير السعر
-            change = last_close - prev_close
-            pct_change = (change / prev_close) * 100
+        change = last_close - prev_close
+        pct_change = (change / prev_close) * 100
 
-            st.subheader(f"📊 ملخص الجلسة والقمم: {stock_symbol}")
-            col1, col2, col3, col4 = st.columns(4)
-            col1.metric("آخر سعر إغلاق", f"{last_close:.2f} EGP", f"{change:+.2f} ({pct_change:+.2f}%)")
-            col2.metric("أعلى سعر بالجلسة", f"{last_high:.2f} EGP")
-            col3.metric("🏆 القمة التاريخية (ATH)", f"{ath_price:.2f} EGP")
-            col4.metric("حجم التداول", f"{last_vol:,.0f}")
+        # ===== ملخص الجلسة =====
+        st.subheader(f"📊 ملخص: {stock_symbol}")
+        col1, col2, col3, col4 = st.columns(4)
+        col1.metric("آخر إغلاق", f"{last_close:.2f} EGP", f"{change:+.2f} ({pct_change:+.2f}%)")
+        col2.metric("أعلى الجلسة", f"{last_high:.2f} EGP")
+        col3.metric("🏆 القمة التاريخية", f"{ath_price:.2f} EGP" if ath_price else "N/A")
+        col4.metric("حجم التداول", f"{last_vol:,.0f}")
 
-            # --- حساب النقاط المحورية (Pivot Points) ---
-            pivot = (last_high + last_low + last_close) / 3
-            r1 = (2 * pivot) - last_low
-            s1 = (2 * pivot) - last_high
-            r2 = pivot + (last_high - last_low)
-            s2 = pivot - (last_high - last_low)
+        # ===== حساب النقاط المحورية (Pivot Points) =====
+        pivot = (last_high + last_low + last_close) / 3
+        r1 = (2 * pivot) - last_low
+        s1 = (2 * pivot) - last_high
+        s2 = pivot - (last_high - last_low)
+        stop_loss = s2 * 0.985
 
-            # وقف الخسارة
-            stop_loss = s2 * 0.985
+        st.markdown("---")
+        st.subheader("🛡️ تقييم أمان القمم والقرار")
 
-            st.markdown("---")
-            st.subheader("🛡️ تقييم أمان القمم والقرار التكتيكي")
+        is_near_ath = ath_price and (last_close >= ath_price * 0.97)
 
-            # كشف القمة التاريخية (لو السعر قريب جداً من القمة بفرق 2% مثلاً)
-            is_near_ath = (last_close >= ath_price * 0.97) and (last_close <= ath_price * 1.01)
-
-            if is_near_ath:
-                st.error(f"⚠️ **تحذير شديد: السهم عند قمة تاريخية (سعر {last_close:.2f} قريب من {ath_price:.2f})!**")
-                st.write(f"🛑 **ممنوع الشراء بأسعار السوق الآن.** السهم معرض لارتداد وهبوط لأسفل (قد يستهدف مناطق الـ 90 أو أقل لتجميع السيولة).")
-                st.write(f"✅ **الشرط الوحيد للشراء:** إغلاق مؤكد فوق `{ath_price:.2f}` بتداول قوي، أو الانتظار حتى الهبوط لمناطق الدعم.")
-            elif last_close < s1:
-                st.success("🟢 **السهم في منطقة تصحيح ودعم ممتازة للشراء.**")
-            else:
-                st.info("🔵 **السهم في منطقة حركة متوازنة.**")
-
-            # تفاصيل خطة العمل
-            st.markdown("### 📋 أسعار ومناطق التنفيذ المقترحة:")
-            c1, c2, c3 = st.columns(3)
-            
-            with c1:
-                st.markdown(f"**📉 الشراء الآمن (بعد التصحيح):**\n`{s2:.2f}` إلى `{s1:.2f}` جنيه\n*(المناطق المتوقعة لو نزل عن 94)*")
-            with c2:
-                st.markdown(f"**🚀 شرط شراء الاختراق:**\nإغلاق مؤكد فوق `{ath_price:.2f}` جنيه")
-            with c3:
-                st.markdown(f"**🛑 وقف الخسارة صارم:**\n`{stop_loss:.2f}` جنيه")
-
-            # --- الرسم البياني ---
-            st.markdown("---")
-            st.write("### 📉 حركة السهم مقارنة بالقمة التاريخية")
-            st.line_chart(df['Close'])
-
-            with st.expander("عرض جدول البيانات التفصيلي"):
-                st.dataframe(df.sort_index(ascending=False))
-
+        if is_near_ath:
+            st.error(f"⚠️ **تحذير: السهم قريب من القمة التاريخية ({ath_price:.2f} EGP)!**")
+            st.write("🛑 **ممنوع الشراء بأسعار السوق الآن.** انتظر التصحيح أو إغلاق مؤكد فوق القمة.")
+        elif last_close < s1:
+            st.success("🟢 **السهم في منطقة دعم ممتازة للشراء.**")
         else:
-            st.warning("البيانات المتاحة غير كافية للتحليل.")
-            
+            st.info("🔵 **السهم في منطقة حركة متوازنة.**")
+
+        # ===== خطة التنفيذ =====
+        st.markdown("### 📋 مناطق التنفيذ:")
+        c1, c2, c3 = st.columns(3)
+        with c1:
+            st.markdown(f"**📉 شراء آمن (بعد التصحيح):**\n`{s2:.2f}` ← `{s1:.2f}` جنيه")
+        with c2:
+            st.markdown(f"**🚀 شراء اختراق:**\nفوق `{ath_price:.2f}` جنيه" if ath_price else "N/A")
+        with c3:
+            st.markdown(f"**🛑 حد وقف الخسارة:**\n`{stop_loss:.2f}` جنيه")
+
+        # ===== رسم Candlestick تفاعلي واحترافي =====
+        st.markdown("---")
+        st.write("### 📉 الشارت التفاعلي (شموع يابانية + المتوسطات)")
+
+        fig = go.Figure()
+        fig.add_trace(go.Candlestick(
+            x=df.index, open=df['Open'], high=df['High'],
+            low=df['Low'], close=df['Close'], name="السعر"
+        ))
+        fig.add_trace(go.Scatter(x=df.index, y=df['EMA20'], 
+                                 line=dict(color='orange', width=1.5), name="EMA 20"))
+        fig.add_trace(go.Scatter(x=df.index, y=df['EMA50'], 
+                                 line=dict(color='deepskyblue', width=1.5), name="EMA 50"))
+        
+        # إضافة خط القمة التاريخية على الشارت
+        if ath_price:
+            fig.add_hline(y=ath_price, line_dash="dash", line_color="red",
+                          annotation_text=f"ATH: {ath_price:.2f}", annotation_position="top left")
+
+        fig.update_layout(
+            xaxis_rangeslider_visible=False,
+            height=500,
+            margin=dict(l=10, r=10, t=30, b=10),
+            template="plotly_dark"
+        )
+        st.plotly_chart(fig, use_container_width=True)
+
+        with st.expander("📋 عرض جدول البيانات التاريخية"):
+            st.dataframe(df.sort_index(ascending=False), use_container_width=True)
+
     except Exception as e:
-        st.error(f"حدث خطأ أثناء جلب البيانات: {e}")
+        st.error(f"❌ حدث خطأ أثناء جلب البيانات: {e}")
+        st.info("تأكد من رمز السهم أو حاول مرة أخرى.")
