@@ -1,16 +1,19 @@
 import sys
 import os
 
-# ضبط مسار المشروع لتفادي أخطاء الاستيراد (ImportError)
+# ضبط مسار المشروع
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
+
 import streamlit as st
 import pandas as pd
 import yfinance as yf
+
 # إعدادات الصفحة
 st.set_page_config(
-    page_title="محلل الأسهم المصرية | EGX Tracker",
+    page_title="محلل الأسهم المصرية",
     page_icon="📈",
     layout="wide"
+)
 
 # عنوان لوحة التحكم
 st.title("📈 لوحة متابعة الأسهم المصرية (EGX)")
@@ -22,18 +25,15 @@ stock_symbol = st.sidebar.text_input("رمز السهم (مثال: COMI, TMGH, F
 period = st.sidebar.selectbox("الفترة الزمنية:", ["1mo", "3mo", "6mo", "1y", "2y", "5y"], index=3)
 
 if stock_symbol:
-    # إضافة الرمز الخاص بالبورصة المصرية في Yahoo Finance (.CA)
     full_symbol = f"{stock_symbol}.CA" if not stock_symbol.endswith(".CA") else stock_symbol
 
     st.subheader(f"بيانات سهم: {stock_symbol}")
     
     try:
-        # جلب البيانات
         ticker = yf.Ticker(full_symbol)
         df = ticker.history(period=period)
 
         if not df.empty:
-            # عرض آخر سعر وأعلى/أقل سعر
             last_price = df['Close'].iloc[-1]
             prev_price = df['Close'].iloc[-2] if len(df) > 1 else last_price
             change = last_price - prev_price
@@ -44,11 +44,9 @@ if stock_symbol:
             col2.metric("أعلى سعر بالفترة", f"{df['High'].max():.2f} EGP")
             col3.metric("أقل سعر بالفترة", f"{df['Low'].min():.2f} EGP")
 
-            # رسم بياني لحركة السعر
             st.write("### رسم بياني لحركة السهم")
             st.line_chart(df['Close'])
 
-            # جدول البيانات
             with st.expander("عرض جدول البيانات التفصيلي"):
                 st.dataframe(df.sort_index(ascending=False))
         else:
