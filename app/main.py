@@ -3,17 +3,14 @@ import os
 
 # ضبط مسار المشروع لتفادي أخطاء الاستيراد (ImportError)
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
-
 import streamlit as st
 import pandas as pd
 import yfinance as yf
-
 # إعدادات الصفحة
 st.set_page_config(
     page_title="محلل الأسهم المصرية | EGX Tracker",
     page_icon="📈",
     layout="wide"
-)
 
 # عنوان لوحة التحكم
 st.title("📈 لوحة متابعة الأسهم المصرية (EGX)")
